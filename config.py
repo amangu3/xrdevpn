@@ -26,7 +26,6 @@ def mac_to_esi(mac_input):
     if len(clean) != 12:
         raise ValueError(f"Invalid MAC: {mac_input}")
     b = [clean[i:i+2] for i in range(0, 12, 2)]
-    # ESI type 0: 9 bytes = 00.b0.b1.b2.b3.b4.b5.00.00
     return f"00.{b[0]}.{b[1]}.{b[2]}.{b[3]}.{b[4]}.{b[5]}.00.00"
 
 def ask(prompt, default=None):
@@ -102,12 +101,11 @@ def ask_load_balancing_mode():
             "single-active",
         ]
     )
-
     lb_line  = ""
     sc_lines = ""
 
     if choice == '1':
-        pass  # all-active default, nothing to add
+        pass
 
     elif choice == '2':
         lb_line = "   load-balancing-mode port-active"
@@ -133,47 +131,17 @@ def ask_load_balancing_mode():
     return lb_line, sc_lines
 
 
-# ─── Subinterface + L2 Service ────────────────────────────────────────────────
+# ─── L2 Service ───────────────────────────────────────────────────────────────
 
-def ask_subinterface(node_name, evi, is_second_node=False, sub1_name=None, vlan_tag=None):
-    """
-    Ask subinterface details for a node.
-    For node2 in MH: subinterface name may differ but vlan/rewrite stays same.
-    Returns (subif_name, vlan_tag, config_lines)
-    """
-    print(f"\n  -- Subinterface for {node_name} --")
-
-    if is_second_node:
-        sub_name = ask(f"Enter subinterface name for {node_name} (e.g. Bundle-Ether200.10)")
-        # vlan and rewrite same as node1
-        v = vlan_tag
-    else:
-        sub_name = ask(f"Enter subinterface name for {node_name} (e.g. Bundle-Ether100.10)")
-        v        = ask("Enter VLAN tag (e.g. 10)")
-
-    cfg  = f"!\ninterface {sub_name} l2transport\n"
-    cfg += f" encapsulation dot1q {v}\n"
-    cfg += f" rewrite ingress tag pop 1 symmetric\n"
-    cfg += f"!\n"
-
-    return sub_name, v, cfg
-
-
-def ask_l2_service(evi, sub_name_node1, sub_name_node2=None, bundle_iface=None, is_mh=False):
-    """
-    Ask xconnect or bridge-domain config.
-    Returns (config_node1, config_node2)
-    """
+def ask_l2_service(evi, sub_name_node1, sub_name_node2=None, is_mh=False):
     choice = ask_choice(
         "Select L2 service type:",
         ["xconnect (VPWS)", "bridge-domain"]
     )
-
     cfg1 = ""
     cfg2 = ""
 
     if choice == '1':
-        # xconnect
         xc_group = ask("Enter xconnect group name (e.g. VPWS)")
         p2p_name = ask("Enter p2p name (e.g. 10)")
 
@@ -191,7 +159,6 @@ def ask_l2_service(evi, sub_name_node1, sub_name_node2=None, bundle_iface=None, 
             cfg2 = xc_config(sub_name_node2)
 
     elif choice == '2':
-        # bridge-domain
         bd_group  = ask("Enter bridge-domain group name (e.g. 100)")
         bd_domain = ask("Enter bridge-domain name (e.g. 100)")
 
@@ -220,8 +187,17 @@ def single_home(site_num):
 
     node         = ask("Enter node name (e.g. R36)")
     evi          = ask("Enter EVI / VPN-ID (e.g. 100)")
-    bundle_iface = ask("Enter access interface (e.g. Bundle-Ether100)")
+    bundle_iface = ask("Enter Bundle interface name (e.g. Bundle-Ether100)")
 
+    # Physical interfaces
+    phys_ifaces = ask_interfaces(f"{node} physical interfaces")
+
+    # Subinterface
+    print(f"\n  -- Subinterface --")
+    sub_name = ask(f"Enter subinterface name (e.g. Bundle-Ether100.10)")
+    vlan_tag = ask("Enter VLAN tag (e.g. 10)")
+
+    # Core isolation
     core_iso    = ask_yes_no("\n  Do you want core-isolation?")
     group_no    = None
     core_ifaces = []
@@ -229,35 +205,46 @@ def single_home(site_num):
         group_no    = ask("Enter core-isolation group number (e.g. 1)")
         core_ifaces = ask_interfaces("core-facing interfaces")
 
-    # EVPN block
-    config  = f"!\n! --- EVPN Config for {node} (Single-Home, Site {site_num}) ---\n!\n"
-    config += f"evpn\n evi {evi}\n  advertise-mac\n !\n"
+    # ── Build config in correct order ──
+    cfg = f"!\n! --- EVPN Config for {node} (Single-Home, Site {site_num}) ---\n!\n"
 
+    # 1. Bundle interface (lacp not needed for SH)
+    cfg += f"!\ninterface {bundle_iface}\n!\n"
+
+    # 2. Subinterface l2transport
+    cfg += f"!\ninterface {sub_name} l2transport\n"
+    cfg += f" encapsulation dot1q {vlan_tag}\n"
+    cfg += f" rewrite ingress tag pop 1 symmetric\n!\n"
+
+    # 3. Physical interfaces -> bundle
+    bundle_id_match = re.search(r'(\d+)$', bundle_iface)
+    bundle_id = bundle_id_match.group(1) if bundle_id_match else evi
+    for iface in phys_ifaces:
+        cfg += f"!\ninterface {iface}\n"
+        cfg += f" bundle id {bundle_id} mode active\n!\n"
+
+    # 4. EVPN block
+    cfg += f"!\nevpn\n evi {evi}\n  advertise-mac\n !\n"
     if core_iso:
-        config += f" group {group_no}\n"
+        cfg += f" group {group_no}\n"
         for iface in core_ifaces:
-            config += f"  core interface {iface}\n"
-        config += " !\n"
-
-    config += f" interface {bundle_iface}\n"
-    config += f"  ethernet-segment\n"
-    config += f"   type 1 auto-generation-disable\n"
-    config += f"  !\n"
+            cfg += f"  core interface {iface}\n"
+        cfg += " !\n"
+    cfg += f" interface {bundle_iface}\n"
+    cfg += f"  ethernet-segment\n"
+    cfg += f"   type 1 auto-generation-disable\n"
+    cfg += f"  !\n"
     if core_iso:
-        config += f"  core-isolation-group {group_no}\n"
-    config += " !\n!\n"
+        cfg += f"  core-isolation-group {group_no}\n"
+    cfg += " !\n!\n"
 
-    # Subinterface
-    sub_name, vlan_tag, sub_cfg = ask_subinterface(node, evi)
-    config += sub_cfg
-
-    # L2 service
-    l2_cfg, _ = ask_l2_service(evi, sub_name, bundle_iface=bundle_iface, is_mh=False)
-    config += l2_cfg
+    # 5. L2 service
+    l2_cfg, _ = ask_l2_service(evi, sub_name, is_mh=False)
+    cfg += l2_cfg
 
     print_header(f"Config - {node}")
-    print(config)
-    save_config(f"evpn_sh_{node.lower()}_evi{evi}_site{site_num}.txt", config)
+    print(cfg)
+    save_config(f"evpn_sh_{node.lower()}_evi{evi}_site{site_num}.txt", cfg)
 
 
 # ─── Multi Home ───────────────────────────────────────────────────────────────
@@ -279,6 +266,12 @@ def multi_home(site_num):
     bundle_id1       = bundle_id_match1.group(1) if bundle_id_match1 else evi
     bundle_id2       = bundle_id_match2.group(1) if bundle_id_match2 else evi
 
+    # Subinterfaces
+    print(f"\n  -- Subinterface --")
+    sub_name1 = ask(f"Enter subinterface name for {node1} (e.g. Bundle-Ether100.10)")
+    vlan_tag  = ask("Enter VLAN tag (e.g. 10)")
+    sub_name2 = ask(f"Enter subinterface name for {node2} (e.g. Bundle-Ether200.10)")
+
     # LACP MAC
     print("\n  -- LACP System MAC --")
     lacp_known = ask_yes_no("  Do you know the LACP common system MAC?")
@@ -296,7 +289,7 @@ def multi_home(site_num):
     print("\n  -- Ethernet Segment Identifier (ESI) --")
     esi_known = ask_yes_no("  Do you know the ESI (type 0)?")
     if esi_known:
-        esi = ask("Enter ESI (e.g. 36.37.00.00.00.00.00.11.00)")
+        esi = ask("Enter ESI (e.g. 00.aa.c1.ab.c9.e5.a2.00.00)")
     else:
         use_iface_mac_esi = ask_yes_no("  Derive ESI from interface MAC?")
         if use_iface_mac_esi:
@@ -322,33 +315,34 @@ def multi_home(site_num):
         core_ifaces_1 = ask_interfaces(f"{node1} core-facing")
         core_ifaces_2 = ask_interfaces(f"{node2} core-facing")
 
-    # Subinterfaces
-    sub_name1, vlan_tag, sub_cfg1 = ask_subinterface(node1, evi)
-    sub_name2, _,        sub_cfg2 = ask_subinterface(node2, evi,
-                                                      is_second_node=True,
-                                                      sub1_name=sub_name1,
-                                                      vlan_tag=vlan_tag)
-
     # L2 service (ask once, apply to both)
-    l2_cfg1, l2_cfg2 = ask_l2_service(
-        evi,
-        sub_name1,
-        sub_name_node2=sub_name2,
-        bundle_iface=bundle_iface1,
-        is_mh=True
-    )
+    l2_cfg1, l2_cfg2 = ask_l2_service(evi, sub_name1, sub_name_node2=sub_name2, is_mh=True)
 
-    # ── Build full config per node ──
-    def build_evpn_block(node_name, phys_ifaces, core_ifaces, bundle_iface, bundle_id):
-        cfg  = f"!\n! --- EVPN Config for {node_name} (Multi-Home, Site {site_num}) ---\n!\n"
-        cfg += f"evpn\n evi {evi}\n  advertise-mac\n !\n"
+    # ── Build config per node ──
+    def build_config(node_name, phys_ifaces, core_ifaces, bundle_iface, bundle_id, sub_name, l2_cfg):
+        cfg = f"!\n! --- EVPN Config for {node_name} (Multi-Home, Site {site_num}) ---\n!\n"
 
+        # 1. Bundle interface with LACP system mac
+        cfg += f"!\ninterface {bundle_iface}\n"
+        cfg += f" lacp system mac {lacp_mac}\n!\n"
+
+        # 2. Subinterface l2transport
+        cfg += f"!\ninterface {sub_name} l2transport\n"
+        cfg += f" encapsulation dot1q {vlan_tag}\n"
+        cfg += f" rewrite ingress tag pop 1 symmetric\n!\n"
+
+        # 3. Physical interfaces -> bundle
+        for iface in phys_ifaces:
+            cfg += f"!\ninterface {iface}\n"
+            cfg += f" bundle id {bundle_id} mode active\n!\n"
+
+        # 4. EVPN block
+        cfg += f"!\nevpn\n evi {evi}\n  advertise-mac\n !\n"
         if core_iso:
             cfg += f" group {group_no}\n"
             for iface in core_ifaces:
                 cfg += f"  core interface {iface}\n"
             cfg += " !\n"
-
         cfg += f" interface {bundle_iface}\n"
         cfg += f"  ethernet-segment\n"
         cfg += f"   identifier type 0 {esi}\n"
@@ -362,24 +356,13 @@ def multi_home(site_num):
             cfg += f"  core-isolation-group {group_no}\n"
         cfg += " !\n!\n"
 
-        # Bundle interface with LACP system mac
-        cfg += f"!\ninterface {bundle_iface}\n"
-        cfg += f" lacp system mac {lacp_mac}\n!\n"
-
-        # Physical interfaces -> bundle
-        for iface in phys_ifaces:
-            cfg += f"!\ninterface {iface}\n"
-            cfg += f" bundle id {bundle_id} mode active\n!\n"
+        # 5. L2 service
+        cfg += l2_cfg
 
         return cfg
 
-    config1  = build_evpn_block(node1, ifaces_node1, core_ifaces_1, bundle_iface1, bundle_id1)
-    config1 += sub_cfg1
-    config1 += l2_cfg1
-
-    config2  = build_evpn_block(node2, ifaces_node2, core_ifaces_2, bundle_iface2, bundle_id2)
-    config2 += sub_cfg2
-    config2 += l2_cfg2
+    config1 = build_config(node1, ifaces_node1, core_ifaces_1, bundle_iface1, bundle_id1, sub_name1, l2_cfg1)
+    config2 = build_config(node2, ifaces_node2, core_ifaces_2, bundle_iface2, bundle_id2, sub_name2, l2_cfg2)
 
     print_header(f"Config - {node1}")
     print(config1)
