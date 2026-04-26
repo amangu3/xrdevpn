@@ -373,26 +373,151 @@ def multi_home(site_num):
     save_config(f"evpn_mh_{node2.lower()}_evi{evi}_site{site_num}.txt", config2)
 
 
-# ─── Main ─────────────────────────────────────────────────────────────────────
+# ─── Add Service to Existing EVI ─────────────────────────────────────────────
 
-def main():
-    print_header("EVPN Config Generator")
+def add_service_existing_evi():
+    print_header("Add Service to Existing EVI")
 
+    # Single or Multi home?
+    home_choice = ask_choice("Select setup type:", ["Single-Home", "Multi-Home"])
+    is_mh       = (home_choice == '2')
+
+    if is_mh:
+        node1 = ask("Enter Node 1 name (e.g. R36)")
+        node2 = ask("Enter Node 2 name (e.g. R37)")
+    else:
+        node1 = ask("Enter node name (e.g. R36)")
+        node2 = None
+
+    evi = ask("Enter existing EVI / VPN-ID (e.g. 100)")
+
+    # Number of sites
     num_sites = int(ask("How many sites do you want to configure?"))
+
+    all_configs = {}  # node -> list of config blocks
+
+    if is_mh:
+        all_configs[node1] = []
+        all_configs[node2] = []
+    else:
+        all_configs[node1] = []
+
+    # L2 service type — ask once, same for all sites
+    l2_choice = ask_choice("Select L2 service type:", ["xconnect (VPWS)", "bridge-domain"])
+
+    # For xconnect — ask group once
+    xc_group  = None
+    bd_group  = None
+    bd_domain = None
+    if l2_choice == '1':
+        xc_group = ask("Enter xconnect group name (e.g. VPWS)")
+    elif l2_choice == '2':
+        bd_group  = ask("Enter bridge-domain group name (e.g. 100)")
+        bd_domain = ask("Enter bridge-domain name (e.g. 100)")
 
     for site in range(1, num_sites + 1):
         print(f"\n{'-'*60}")
         print(f"  SITE {site} of {num_sites}")
         print(f"{'-'*60}")
 
-        choice = ask_choice("Select setup type:", ["Single-Home", "Multi-Home"])
+        # Subinterface for node1
+        print(f"\n  -- Subinterface for {node1} --")
+        sub_name1 = ask(f"Enter subinterface name for {node1} (e.g. Bundle-Ether100.10)")
+        vlan_tag  = ask("Enter VLAN tag (e.g. 10)")
 
-        if choice == '1':
+        # Subinterface for node2 (MH only)
+        sub_name2 = None
+        if is_mh:
+            sub_name2 = ask(f"Enter subinterface name for {node2} (e.g. Bundle-Ether200.10)")
+
+        # Build subinterface config
+        def sub_cfg(sub_name):
+            c  = f"!\ninterface {sub_name} l2transport\n"
+            c += f" encapsulation dot1q {vlan_tag}\n"
+            c += f" rewrite ingress tag pop 1 symmetric\n!\n"
+            return c
+
+        # Build L2 service config
+        def l2_cfg(sub_name, p2p_name=None):
+            if l2_choice == '1':
+                c  = f"!\nl2vpn\n"
+                c += f" xc group {xc_group}\n"
+                c += f"  p2p {p2p_name}\n"
+                c += f"   interface {sub_name}\n"
+                c += f"   neighbor evpn evi {evi} service {evi}\n"
+                c += f"  !\n !\n!\n"
+            else:
+                c  = f"!\nl2vpn\n"
+                c += f" bridge group {bd_group}\n"
+                c += f"  bridge-domain {bd_domain}\n"
+                c += f"   interface {sub_name}\n"
+                c += f"   !\n"
+                c += f"   evi {evi}\n"
+                c += f"   !\n"
+                c += f"  !\n !\n!\n"
+            return c
+
+        # For xconnect ask p2p per site
+        p2p_name = None
+        if l2_choice == '1':
+            p2p_name = ask(f"Enter p2p name for site {site} (e.g. {site*10})")
+
+        # Node1 config
+        site_cfg1  = f"!\n! --- Site {site} Service for {node1} (EVI {evi}) ---\n!\n"
+        site_cfg1 += sub_cfg(sub_name1)
+        site_cfg1 += l2_cfg(sub_name1, p2p_name)
+        all_configs[node1].append(site_cfg1)
+
+        # Node2 config (MH)
+        if is_mh:
+            site_cfg2  = f"!\n! --- Site {site} Service for {node2} (EVI {evi}) ---\n!\n"
+            site_cfg2 += sub_cfg(sub_name2)
+            site_cfg2 += l2_cfg(sub_name2, p2p_name)
+            all_configs[node2].append(site_cfg2)
+
+    # ── Print & Save ──
+    for node, blocks in all_configs.items():
+        full_config = "\n".join(blocks)
+        print_header(f"Config - {node}")
+        print(full_config)
+        fname = f"evpn_service_{node.lower()}_evi{evi}.txt"
+        save_config(fname, full_config)
+
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+
+def main():
+    print_header("EVPN Config Generator")
+
+    choice = ask_choice(
+        "Select operation:",
+        [
+            "Create new EVI (Single-Home)",
+            "Create new EVI (Multi-Home)",
+            "Add service to existing EVI",
+        ]
+    )
+
+    if choice == '1':
+        num_sites = int(ask("How many sites do you want to configure?"))
+        for site in range(1, num_sites + 1):
+            print(f"\n{'-'*60}")
+            print(f"  SITE {site} of {num_sites}")
+            print(f"{'-'*60}")
             single_home(site)
-        elif choice == '2':
+
+    elif choice == '2':
+        num_sites = int(ask("How many sites do you want to configure?"))
+        for site in range(1, num_sites + 1):
+            print(f"\n{'-'*60}")
+            print(f"  SITE {site} of {num_sites}")
+            print(f"{'-'*60}")
             multi_home(site)
 
-    print_header("All sites configured!")
+    elif choice == '3':
+        add_service_existing_evi()
+
+    print_header("All done!")
 
 
 if __name__ == "__main__":
