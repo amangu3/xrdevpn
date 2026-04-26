@@ -142,15 +142,16 @@ def ask_l2_service(evi, sub_name_node1, sub_name_node2=None, is_mh=False):
     cfg2 = ""
 
     if choice == '1':
-        xc_group = ask("Enter xconnect group name (e.g. VPWS)")
-        p2p_name = ask("Enter p2p name (e.g. 10)")
+        xc_group   = ask("Enter xconnect group name (e.g. VPWS)")
+        p2p_name   = ask("Enter p2p name (e.g. 10)")
+        service_id = ask("Enter service ID (e.g. 10)")
 
         def xc_config(sub_name):
             c  = f"!\nl2vpn\n"
             c += f" xc group {xc_group}\n"
             c += f"  p2p {p2p_name}\n"
             c += f"   interface {sub_name}\n"
-            c += f"   neighbor evpn evi {evi} service {evi}\n"
+            c += f"   neighbor evpn evi {evi} service {service_id}\n"
             c += f"  !\n !\n!\n"
             return c
 
@@ -410,7 +411,8 @@ def add_service_existing_evi():
     bd_group  = None
     bd_domain = None
     if l2_choice == '1':
-        xc_group = ask("Enter xconnect group name (e.g. VPWS)")
+        xc_group   = ask("Enter xconnect group name (e.g. VPWS)")
+        service_id = ask("Enter service ID (e.g. 10)")
     elif l2_choice == '2':
         bd_group  = ask("Enter bridge-domain group name (e.g. 100)")
         bd_domain = ask("Enter bridge-domain name (e.g. 100)")
@@ -444,7 +446,7 @@ def add_service_existing_evi():
                 c += f" xc group {xc_group}\n"
                 c += f"  p2p {p2p_name}\n"
                 c += f"   interface {sub_name}\n"
-                c += f"   neighbor evpn evi {evi} service {evi}\n"
+                c += f"   neighbor evpn evi {evi} service {service_id}\n"
                 c += f"  !\n !\n!\n"
             else:
                 c  = f"!\nl2vpn\n"
