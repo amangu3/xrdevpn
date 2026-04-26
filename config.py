@@ -26,7 +26,8 @@ def mac_to_esi(mac_input):
     if len(clean) != 12:
         raise ValueError(f"Invalid MAC: {mac_input}")
     b = [clean[i:i+2] for i in range(0, 12, 2)]
-    return f"00.{b[0]}.{b[1]}.{b[2]}.{b[3]}.{b[4]}.{b[5]}.00.00.00"
+    # ESI type 0: 9 bytes = 00.b0.b1.b2.b3.b4.b5.00.00
+    return f"00.{b[0]}.{b[1]}.{b[2]}.{b[3]}.{b[4]}.{b[5]}.00.00"
 
 def ask(prompt, default=None):
     if default:
