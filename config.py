@@ -150,7 +150,7 @@ def ask_subinterface(node_name, evi, is_second_node=False, sub1_name=None, vlan_
         sub_name = ask(f"Enter subinterface name for {node_name} (e.g. Bundle-Ether100.10)")
         v        = ask("Enter VLAN tag (e.g. 10)")
 
-    cfg  = f"!\ninterface {sub_name}\n"
+    cfg  = f"!\ninterface {sub_name} l2transport\n"
     cfg += f" encapsulation dot1q {v}\n"
     cfg += f" rewrite ingress tag pop 1 symmetric\n"
     cfg += f"!\n"
@@ -198,7 +198,7 @@ def ask_l2_service(evi, sub_name_node1, sub_name_node2=None, bundle_iface=None, 
             c  = f"!\nl2vpn\n"
             c += f" bridge group {bd_group}\n"
             c += f"  bridge-domain {bd_domain}\n"
-            c += f"   interface {bundle_iface}\n"
+            c += f"   interface {sub_name}\n"
             c += f"   !\n"
             c += f"   evi {evi}\n"
             c += f"   !\n"
